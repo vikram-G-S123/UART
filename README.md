@@ -163,21 +163,34 @@ endmodule
 **TestBench:**
 
 `timescale 1 ns / 1 ps
- module uart_tb; 
+ module uart_tb;
+ 
 // Inputs
 reg reset; 
+
 reg txclk;
-reg ld_tx_data; 
-reg [7:0] tx_data; 
+
+reg ld_tx_data;
+
+reg [7:0] tx_data;
+
 reg tx_enable; 
+
 reg rxclk;
-reg uld_rx_data; 
+
+reg uld_rx_data;
+
 reg rx_enable; 
+
 reg rx_in;
+
 // Outputs
 wire tx_out;
+
 wire tx_empty;
+
 wire [7:0] rx_data;
+
 wire rx_empty;
 
 uart uut (
@@ -198,52 +211,92 @@ uart uut (
 reg clk;
 
 initial clk=0;
+
 always #10 clk = ~clk; 
+
 reg [3:0] counter;
+
 initial begin
+
 rxclk=0;
+
 txclk=0;
+
 counter=0;
+
 end
+
 always @(posedge clk) 
 begin
 
 counter<=counter+1;
+
 if (counter == 15) 
 
 txclk <= ~txclk;
+
 rxclk<= ~rxclk;
+
 end
 
 always@ (tx_out)
+
  rx_in=tx_out;
+ 
 initial begin
+
 reset = 1;
+
 ld_tx_data = 0;
+
 tx_data = 0;
+
 tx_enable = 1;
+
 uld_rx_data = 0;
+
 rx_enable = 1;
+
 rx_in = 1;
+
 #500;
+
 reset = 0;
+
 tx_data=8'b0111_1111;
+
 #500;
+
 wait (tx_empty==1); //make sure data can be sent
+
 ld_tx_data = 1; //load data to send
+
 wait (tx_empty==0); //wait until data loaded for send
+
 $display("Data loaded for send");
+
 ld_tx_data = 0;
-wait (tx_empty==1); //wait for flag of data to finish sending 
+
+wait (tx_empty==1); 
+
 $display ("Data sent");
+
 wait (rx_empty==0); //wait for
+
 $display("RX Byte Ready");
+
 uld_rx_data = 1;
+
 wait (rx_empty==1);
+
 $display("RX Byte Unloaded: %b", rx_data);
+
 #100;
+
 $finish;
+
 end
+
 endmodule
 
 
