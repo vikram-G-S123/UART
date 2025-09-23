@@ -23,6 +23,7 @@ Synthesis requires three files as follows,
 `timescale 1ns / 1ps
 
 module uart (
+
     input reset,
     input txclk,
     input ld_tx_data,
@@ -37,19 +38,27 @@ module uart (
     input rx_in,
     output reg rx_empty
 );
-
-
+   
 reg [7:0] tx_reg;
+
 reg tx_over_run;
+
 reg [3:0] tx_cnt;
 
 reg [7:0] rx_reg;
+
 reg [3:0] rx_sample_cnt;
+
 reg [3:0] rx_cnt;
+
 reg rx_frame_err;
+
 reg rx_over_run;
+
 reg rx_d1;
+
 reg rx_d2;
+
 reg rx_busy;
 
 always @(posedge rxclk or posedge reset)
@@ -163,8 +172,7 @@ endmodule
 `timescale 1 ns / 1 ps
  module uart_tb;
  
-// Inputs
-reg reset; 
+ reg reset; 
 
 reg txclk;
 
