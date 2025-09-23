@@ -38,7 +38,7 @@ module uart (
     output reg rx_empty
 );
 
-// Internal Variables
+
 reg [7:0] tx_reg;
 reg tx_over_run;
 reg [3:0] tx_cnt;
@@ -52,7 +52,6 @@ reg rx_d1;
 reg rx_d2;
 reg rx_busy;
 
-// UART RX Logic
 always @(posedge rxclk or posedge reset)
 begin
 
@@ -115,7 +114,6 @@ begin
     end
 end
 
-// UART TX Logic
 always @(posedge txclk or posedge reset)
 begin
 
