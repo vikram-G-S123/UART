@@ -22,146 +22,136 @@ Synthesis requires three files as follows,
 **Design Code**
 `timescale 1ns / 1ps
 
-module uart (
-
-    input reset,
-    input txclk,
-    input ld_tx_data,
-    input [7:0] tx_data,
-    input tx_enable,
-    output reg tx_out,
-    output reg tx_empty,
-    input rxclk,
-    input uld_rx_data,
-    output reg [7:0] rx_data,
-    input rx_enable,
-    input rx_in,
-    output reg rx_empty
+module uart64_with_baud #(
+    parameter CLK_FREQ = 50_000_000,   
+    parameter BAUD_RATE = 9600         
+)(
+    input wire clk,                    // System clock
+    input wire reset,                  // Asynchronous reset
+    // Transmitter
+    input wire ld_tx_data,             // Load transmit data
+    input wire [63:0] tx_data,         // 64-bit transmit data
+    input wire tx_enable,              // Enable transmission
+    output reg tx_out,                 // Serial output line
+    output reg tx_empty,               // TX ready flag
+    // Receiver
+    input wire uld_rx_data,            // Unload received data
+    output reg [63:0] rx_data,         // 64-bit received data
+    input wire rx_enable,              // Enable receiver
+    input wire rx_in,                  // Serial input
+    output reg rx_empty                // RX ready flag
 );
-   
-reg [7:0] tx_reg;
 
-reg tx_over_run;
+    localparam integer BAUD_DIV = CLK_FREQ / BAUD_RATE;
+    reg [15:0] baud_cnt = 0;
+    reg baud_tick = 0;
 
-reg [3:0] tx_cnt;
-
-reg [7:0] rx_reg;
-
-reg [3:0] rx_sample_cnt;
-
-reg [3:0] rx_cnt;
-
-reg rx_frame_err;
-
-reg rx_over_run;
-
-reg rx_d1;
-
-reg rx_d2;
-
-reg rx_busy;
-
-always @(posedge rxclk or posedge reset)
-begin
-
-    if (reset) begin
-        rx_reg <= 0;
-        rx_data <= 0;
-        rx_sample_cnt <= 0;
-        rx_cnt <= 0;
-        rx_frame_err <= 0;
-        rx_over_run <= 0;
-        rx_empty <= 1;
-        rx_d1 <= 1;
-        rx_d2 <= 1;
-        rx_busy <= 0;
-    end 
-    else begin
-    
-        rx_d1 <= rx_in;
-        rx_d2 <= rx_d1;
-
-        if (uld_rx_data) begin
-            rx_data <= rx_reg;
-            rx_empty <= 1;
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            baud_cnt <= 0;
+            baud_tick <= 0;
+        end else begin
+            if (baud_cnt == BAUD_DIV/2) begin
+                baud_cnt <= 0;
+                baud_tick <= 1;
+            end else begin
+                baud_cnt <= baud_cnt + 1;
+                baud_tick <= 0;
+            end
         end
+    end
 
-        if (rx_enable) begin
-            if (!rx_busy && !rx_d2) begin
-                rx_busy <= 1;
-                rx_sample_cnt <= 1;
-                rx_cnt <= 0;
+    // ----------- Transmitter -----------
+    reg [63:0] tx_reg;
+    reg [6:0] tx_cnt;  // Need 0-65 count (1 start + 64 data + 1 stop)
+    reg tx_busy;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            tx_reg <= 0;
+            tx_cnt <= 0;
+            tx_empty <= 1;
+            tx_out <= 1;
+            tx_busy <= 0;
+        end else if (baud_tick) begin
+            // Load new data when TX is empty
+            if (ld_tx_data && tx_empty) begin
+                tx_reg <= tx_data;
+                tx_empty <= 0;
+                tx_busy <= 1;
+                tx_cnt <= 0;
             end
 
-            if (rx_busy) begin
-                rx_sample_cnt <= rx_sample_cnt + 1;
+            // Transmission logic
+            if (tx_busy && tx_enable) begin
+                tx_cnt <= tx_cnt + 1;
 
-                if (rx_sample_cnt == 7) begin
-                    if ((rx_d2 == 1) && (rx_cnt == 0)) begin 
-                        rx_busy <= 0;
-                    end 
-                    else begin
+                if (tx_cnt == 0)
+                    tx_out <= 0;  // Start bit
+                else if (tx_cnt >= 1 && tx_cnt <= 64)
+                    tx_out <= tx_reg[tx_cnt - 1];  // Data bits (LSB first)
+                else if (tx_cnt == 65) begin
+                    tx_out <= 1;  // Stop bit
+                    tx_empty <= 1;
+                    tx_busy <= 0;
+                end
+            end
+        end
+    end
+
+    // ----------- Receiver -----------
+    reg [63:0] rx_reg;
+    reg [6:0] rx_cnt;           // up to 64 data bits
+    reg [3:0] rx_sample_cnt;
+    reg rx_busy;
+    reg rx_d1, rx_d2;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            rx_data <= 0;
+            rx_empty <= 1;
+            rx_reg <= 0;
+            rx_cnt <= 0;
+            rx_sample_cnt <= 0;
+            rx_busy <= 0;
+            rx_d1 <= 1;
+            rx_d2 <= 1;
+        end else begin
+            // Synchronize input
+            rx_d1 <= rx_in;
+            rx_d2 <= rx_d1;
+
+            if (baud_tick && rx_enable) begin
+                // Detect start bit
+                if (!rx_busy && !rx_d2) begin
+                    rx_busy <= 1;
+                    rx_cnt <= 0;
+                    rx_sample_cnt <= 0;
+                end
+                // Data sampling
+                else if (rx_busy) begin
+                    rx_sample_cnt <= rx_sample_cnt + 1;
+                    if (rx_sample_cnt == 8) begin
+                        rx_sample_cnt <= 0;
                         rx_cnt <= rx_cnt + 1;
 
-                        if (rx_cnt > 0 && rx_cnt < 9) begin 
+                        if (rx_cnt >= 1 && rx_cnt <= 64)
                             rx_reg[rx_cnt - 1] <= rx_d2;
-                        end
 
-                        if (rx_cnt == 9) begin
-                            rx_busy <= 0;
+                        if (rx_cnt == 65) begin
+                            rx_data <= rx_reg;
                             rx_empty <= 0;
-                            rx_over_run <= (rx_empty) ? 0 : 1;
+                            rx_busy <= 0;
                         end
                     end
                 end
             end
-        end
 
-        if (!rx_enable) begin
-            rx_busy <= 0;
-        end
-    end
-end
-
-always @(posedge txclk or posedge reset)
-begin
-
-    if (reset) begin
-        tx_reg <= 0;
-        tx_empty <= 1;
-        tx_over_run <= 0;
-        tx_out <= 1;
-        tx_cnt <= 0;
-    end 
-    else begin
-        if (ld_tx_data) begin
-            if (!tx_empty) begin
-                tx_over_run <= 1;
-            end 
-            else begin
-                tx_reg <= tx_data;
-                tx_empty <= 0;
-            end
-        end
-
-        if (tx_enable && !tx_empty) begin
-            tx_cnt <= tx_cnt + 1;
-            if (tx_cnt == 0)
-                tx_out <= 0; // Start bit
-            else if (tx_cnt > 0 && tx_cnt < 9)
-                tx_out <= tx_reg[tx_cnt - 1]; // Data bits
-            else if (tx_cnt == 9) begin
-                tx_out <= 1; // Stop bit
-                tx_cnt <= 0;
-                tx_empty <= 1;
-            end
-        end
-
-        if (!tx_enable) begin
-            tx_cnt <= 0;
+            // When data is read, mark RX empty
+            if (uld_rx_data)
+                rx_empty <= 1;
         end
     end
-end
 
 endmodule
 
@@ -169,142 +159,77 @@ endmodule
 
 **TestBench:**
 
-`timescale 1 ns / 1 ps
- module uart_tb;
- 
- reg reset; 
+`timescale 1ns / 1ps
+module uart64_with_baud_tb;
 
-reg txclk;
+    reg clk;
+    reg reset;
+    reg ld_tx_data;
+    reg [63:0] tx_data;
+    reg tx_enable;
+    wire tx_out;
+    wire tx_empty;
+    reg uld_rx_data;
+    wire [63:0] rx_data;
+    reg rx_enable;
+    wire rx_empty;
+    reg rx_in;
 
-reg ld_tx_data;
+    // Instantiate DUT
+    uart64_with_baud #(
+        .CLK_FREQ(50_000_000),
+        .BAUD_RATE(9600)
+    ) uut (
+        .clk(clk),
+        .reset(reset),
+        .ld_tx_data(ld_tx_data),
+        .tx_data(tx_data),
+        .tx_enable(tx_enable),
+        .tx_out(tx_out),
+        .tx_empty(tx_empty),
+        .uld_rx_data(uld_rx_data),
+        .rx_data(rx_data),
+        .rx_enable(rx_enable),
+        .rx_in(rx_in),
+        .rx_empty(rx_empty)
+    );
 
-reg [7:0] tx_data;
+    // Generate system clock (50 MHz)
+    initial clk = 0;
+    always #10 clk = ~clk;
 
-reg tx_enable; 
+    // Connect TX → RX
+    always @(tx_out)
+        rx_in = tx_out;
 
-reg rxclk;
+    initial begin
+        $dumpfile("uart64.vcd");
+        $dumpvars(0, uart64_with_baud_tb);
 
-reg uld_rx_data;
+        reset = 1;
+        ld_tx_data = 0;
+        tx_enable = 1;
+        rx_enable = 1;
+        uld_rx_data = 0;
+        rx_in = 1;
 
-reg rx_enable; 
+        #100 reset = 0;
+        #200;
 
-reg rx_in;
+        tx_data = 64'hA5A5_1234_DEAD_BEEF;  // Example 64-bit data
+        ld_tx_data = 1;
+        #20 ld_tx_data = 0;
 
-// Outputs
-wire tx_out;
+        wait (rx_empty == 0);
+        $display("Received 64-bit Data: %h", rx_data);
 
-wire tx_empty;
+        uld_rx_data = 1;
+        #20 uld_rx_data = 0;
 
-wire [7:0] rx_data;
-
-wire rx_empty;
-
-uart uut (
-.reset(reset),
-.txclk(txclk),
-.ld_tx_data(ld_tx_data),
-.tx_data(tx_data),
-.tx_enable(tx_enable),
-.tx_out (tx_out),
-.tx_empty(tx_empty), 
-.rxclk(rxclk),
-.uld_rx_data(uld_rx_data),
-.rx_data(rx_data),
-.rx_enable(rx_enable),
-.rx_in(rx_in),
-.rx_empty(rx_empty) );
-
-reg clk;
-
-initial clk=0;
-
-always #10 clk = ~clk; 
-
-reg [3:0] counter;
-
-initial begin
-
-rxclk=0;
-
-txclk=0;
-
-counter=0;
-
-end
-
-always @(posedge clk) 
-begin
-
-counter<=counter+1;
-
-if (counter == 15) 
-
-txclk <= ~txclk;
-
-rxclk<= ~rxclk;
-
-end
-
-always@ (tx_out)
-
- rx_in=tx_out;
- 
-initial begin
-
-reset = 1;
-
-ld_tx_data = 0;
-
-tx_data = 0;
-
-tx_enable = 1;
-
-uld_rx_data = 0;
-
-rx_enable = 1;
-
-rx_in = 1;
-
-#500;
-
-reset = 0;
-
-tx_data=8'b0111_1111;
-
-#500;
-
-wait (tx_empty==1); //make sure data can be sent
-
-ld_tx_data = 1; //load data to send
-
-wait (tx_empty==0); //wait until data loaded for send
-
-$display("Data loaded for send");
-
-ld_tx_data = 0;
-
-wait (tx_empty==1); 
-
-$display ("Data sent");
-
-wait (rx_empty==0); //wait for
-
-$display("RX Byte Ready");
-
-uld_rx_data = 1;
-
-wait (rx_empty==1);
-
-$display("RX Byte Unloaded: %b", rx_data);
-
-#100;
-
-$finish;
-
-end
+        #10000 $finish;
+    end
 
 endmodule
-
 
 
 
